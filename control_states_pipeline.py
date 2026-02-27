@@ -36,7 +36,6 @@ import os
 import re
 import sys
 import argparse
-from botocore.exceptions import ClientError
 
 # ============================================================
 # Configuration (all from environment variables)
@@ -113,10 +112,19 @@ def list_s3_pdfs(s3_client, target_months=None):
         list of S3 keys
     """
     try:
-        response = s3_client.list_objects_v2(Bucket=S3_BUCKET, Prefix=S3_PREFIX)
-        if 'Contents' not in response:
-            return []
-        all_pdfs = sorted([obj['Key'] for obj in response['Contents'] if obj['Key'].endswith('.pdf')])
+        all_keys = []
+        continuation_token = None
+        while True:
+            kwargs = {'Bucket': S3_BUCKET, 'Prefix': S3_PREFIX}
+            if continuation_token:
+                kwargs['ContinuationToken'] = continuation_token
+            response = s3_client.list_objects_v2(**kwargs)
+            if 'Contents' in response:
+                all_keys.extend([obj['Key'] for obj in response['Contents'] if obj['Key'].endswith('.pdf')])
+            if not response.get('IsTruncated'):
+                break
+            continuation_token = response.get('NextContinuationToken')
+        all_pdfs = sorted(all_keys)
     except Exception as e:
         print(f"  ERROR listing S3 bucket: {e}")
         return []
@@ -393,6 +401,9 @@ def process_pdf(textract_client, s3_key):
     if len(spirits_markets_indices) >= 2:
         table_types[spirits_markets_indices[0]] = 'spirits_markets_total'
         table_types[spirits_markets_indices[-1]] = 'spirits_markets_on_premise'
+    elif len(spirits_markets_indices) == 1:
+        # Only one spirits markets table found — treat as total
+        table_types[spirits_markets_indices[0]] = 'spirits_markets_total'
 
     # Build records
     sales_records = []
